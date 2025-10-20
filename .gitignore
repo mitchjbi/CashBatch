@@ -1,0 +1,62 @@
+# See https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build results
+bin/
+obj/
+[Bb]uild/
+[Ll]ogs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+
+# NuGet
+*.nupkg
+packages/
+*.snupkg
+.nuget/
+
+# Rider
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results
+TestResult*/
+*.trx
+
+# Coverage
+coverage*
+.coverage*
+
+# Publish
+*.publish.xml
+
+# Local settings and secrets
+appsettings*.json
+!appsettings.json.example
+src/CashBatch.Desktop/appsettings.json
+*.local.json
+*.secrets.json
+
+# EF migrations bundles
+*.exe
+*.dll
+
+# Reports/exports
+*.pdf
+*.xlsx
+*.csv
+
+# Logs
+*.log

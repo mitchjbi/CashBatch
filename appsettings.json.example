@@ -1,0 +1,13 @@
+# Copy to src/CashBatch.Desktop/appsettings.json and fill in local values.
+{
+  "ConnectionStrings": {
+    "ReadDb": "Server=YOUR_SERVER;Database=YOUR_DB;User Id=USER;Password=SECRET;TrustServerCertificate=True;",
+    "WriteDb": "Server=YOUR_SERVER;Database=YOUR_DB;User Id=USER;Password=SECRET;TrustServerCertificate=True;"
+  },
+  "ERP": {
+    "PickupShare": "\\\\server\\share\\path"
+  },
+  "Logging": {
+    "Path": "C:\\logs\\cashbatch-.log"
+  }
+}
