@@ -84,6 +84,7 @@
                         <DataGridTextColumn Header="Net Due Date" Binding="{Binding NetDueDate, StringFormat=MM/dd/yyyy}" Width="140" />
                         <DataGridTextColumn Header="Amount Remaining" Binding="{Binding AmountRemaining}" Width="160" />
                         <DataGridTextColumn Header="Freight Allowed" Binding="{Binding FreightAllowedAmt}" Width="150" />
+                        <DataGridTextColumn Header="Terms Amount" Binding="{Binding TermsAmount}" Width="150" />
                         <DataGridTextColumn Header="Applied Amount" Binding="{Binding AppliedAmount}" Width="150" />
                         <DataGridCheckBoxColumn Header="Auto-Matched" Binding="{Binding WasAutoMatched}" Width="120" />
                     </DataGrid.Columns>

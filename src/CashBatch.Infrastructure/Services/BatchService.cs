@@ -98,7 +98,7 @@ public class BatchService : IBatchService
             .ToListAsync();
 
         // Build lookup of ERP invoice info by InvoiceNo (case-insensitive)
-        var infoByInv = new Dictionary<string, (DateTime? NetDueDate, decimal? AmountRemaining, decimal? FreightAllowedAmt)>(StringComparer.OrdinalIgnoreCase);
+        var infoByInv = new Dictionary<string, (DateTime? NetDueDate, decimal? AmountRemaining, decimal? FreightAllowedAmt, decimal? TermsAmount, string? BranchId)>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(payment.CustomerId))
         {
             try
@@ -135,6 +135,8 @@ public class BatchService : IBatchService
                             DateTime? due = null;
                             decimal? rem = null;
                             decimal? freight = null;
+                            decimal? terms = null;
+                            string? branchId = null;
                             if (dict != null)
                             {
                                 inv = dict.FirstOrDefault(k => string.Equals(k.Key, "invoice_no", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "InvoiceNo", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "invoice_number", StringComparison.OrdinalIgnoreCase)).Value?.ToString();
@@ -145,6 +147,10 @@ public class BatchService : IBatchService
                                 if (v != null) { rem = Convert.ToDecimal(v); }
                                 v = dict.FirstOrDefault(k => string.Equals(k.Key, "freight_allowed_amt", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "FreightAllowedAmt", StringComparison.OrdinalIgnoreCase)).Value;
                                 if (v != null) { freight = Convert.ToDecimal(v); }
+                                v = dict.FirstOrDefault(k => string.Equals(k.Key, "terms_amount", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "TermsAmount", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "terms_amt", StringComparison.OrdinalIgnoreCase)).Value;
+                                if (v != null) { terms = Convert.ToDecimal(v); }
+                                v = dict.FirstOrDefault(k => string.Equals(k.Key, "branch_id", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "BranchId", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "branchid", StringComparison.OrdinalIgnoreCase) || string.Equals(k.Key, "branch", StringComparison.OrdinalIgnoreCase)).Value;
+                                if (v != null) { branchId = Convert.ToString(v); if (string.IsNullOrWhiteSpace(branchId)) branchId = null; }
                             }
                             else
                             {
@@ -153,9 +159,12 @@ public class BatchService : IBatchService
                                 try { due = (DateTime?)(d.net_due_date ?? d.NetDueDate ?? d.due_date); } catch { }
                                 try { rem = (decimal?)(d.amount_remaining ?? d.AmountRemaining); } catch { }
                                 try { freight = (decimal?)(d.freight_allowed_amt ?? d.FreightAllowedAmt); } catch { }
+                                try { terms = (decimal?)(d.terms_amount ?? d.TermsAmount ?? d.terms_amt); } catch { }
+                                try { branchId = (string?)(d.branch_id ?? d.BranchId ?? d.branchid ?? d.branch); } catch { }
+                                if (string.IsNullOrWhiteSpace(branchId)) branchId = null;
                             }
                             if (!string.IsNullOrWhiteSpace(inv) && !infoByInv.ContainsKey(inv!))
-                                infoByInv[inv!] = (due, rem, freight);
+                                infoByInv[inv!] = (due, rem, freight, terms, branchId);
                         }
                         catch { }
                     }
@@ -171,7 +180,7 @@ public class BatchService : IBatchService
             .Select(l =>
             {
                 infoByInv.TryGetValue(l.InvoiceNo ?? string.Empty, out var info);
-                return new AppliedLineDto(l.InvoiceNo, info.NetDueDate, info.AmountRemaining, info.FreightAllowedAmt, l.AppliedAmount, l.WasAutoMatched);
+                return new AppliedLineDto(l.InvoiceNo, info.NetDueDate, info.AmountRemaining, info.FreightAllowedAmt, info.TermsAmount, info.BranchId ?? l.BranchId, l.AppliedAmount, l.WasAutoMatched);
             })
             .ToList();
 
@@ -191,6 +200,51 @@ public class BatchService : IBatchService
         if (!string.IsNullOrWhiteSpace(key.Trim('|')))
         {
             await _lookup.UpsertAsync("BankRouteAcct", key, customerId, 1.0);
+        }
+    }
+
+    public async Task<string?> GetPossibleCustomerIdAsync(int invoiceNumber)
+    {
+        try
+        {
+            var connStr = _cfg.GetConnectionString("ReadDb");
+            if (string.IsNullOrWhiteSpace(connStr)) return null;
+
+            await using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var dp = new DynamicParameters();
+            dp.Add("InvoiceNo", invoiceNumber.ToString(), System.Data.DbType.AnsiString);
+
+            var rows = await conn.QueryAsync("jbi_sp_cash_batch_customer_lookup", dp, commandType: System.Data.CommandType.StoredProcedure);
+            var first = rows.FirstOrDefault();
+            if (first == null) return null;
+
+            if (first is IDictionary<string, object> dict)
+            {
+                var kv = dict.FirstOrDefault(k => string.Equals(k.Key, "customer_id", StringComparison.OrdinalIgnoreCase));
+                if (!kv.Equals(default(KeyValuePair<string, object>)))
+                {
+                    var val = Convert.ToString(kv.Value);
+                    return string.IsNullOrWhiteSpace(val) ? null : val;
+                }
+            }
+            else
+            {
+                try
+                {
+                    dynamic d = first;
+                    string? val = (string?)d.customer_id;
+                    if (!string.IsNullOrWhiteSpace(val)) return val;
+                }
+                catch { }
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

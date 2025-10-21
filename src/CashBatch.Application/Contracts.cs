@@ -17,9 +17,20 @@ public record PaymentDto(
     string Status,
     bool IsLookupCustomer,
     string? OriginalCustomerId);
-public record AppliedLineDto(string? InvoiceNo, DateTime? NetDueDate, decimal? AmountRemaining, decimal? FreightAllowedAmt, decimal AppliedAmount, bool WasAutoMatched);
+public record AppliedLineDto(string? InvoiceNo, DateTime? NetDueDate, decimal? AmountRemaining, decimal? FreightAllowedAmt, decimal? TermsAmount, string? BranchId, decimal AppliedAmount, bool WasAutoMatched);
 public record LookupDto(Guid Id, string KeyType, string KeyValue, string CustomerId, double Confidence);
 public record LogDto(Guid Id, Guid PaymentId, string Level, string Message, DateTime CreatedAt);
+
+public record ExportOptions(
+    string ExportDirectory,
+    int FiscalYear,
+    int Period,
+    string BankNumber,
+    string GLBankAccountNumber,
+    string ARAccountNumber,
+    string TermsAccountNumber,
+    string AllowedAccountNumber,
+    string DepositNumber);
 
 public interface IImportService
 {
@@ -38,6 +49,7 @@ public interface IBatchService
     Task<IReadOnlyList<PaymentDto>> GetNeedsReviewAsync(Guid batchId);
     Task<IReadOnlyList<AppliedLineDto>> GetAppliedAsync(Guid paymentId);
     Task AssignCustomerAsync(Guid paymentId, string customerId);
+    Task<string?> GetPossibleCustomerIdAsync(int invoiceNumber);
 }
 
 public interface ILookupService
@@ -50,5 +62,5 @@ public interface ILookupService
 
 public interface IERPExportService
 {
-    Task<int> ExportAutoAppliedAsync(Guid batchId, string pickupShare);
+    Task<int> ExportAutoAppliedAsync(Guid batchId, ExportOptions options);
 }

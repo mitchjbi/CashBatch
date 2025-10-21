@@ -28,6 +28,18 @@ namespace CashBatch.Infrastructure.Services
 
             await using var db = await _factory.CreateDbContextAsync();
 
+            // Start a transaction and first perform a set-based assignment of CustomerId from lookups
+            await using var tx = await db.Database.BeginTransactionAsync();
+            try
+            {
+                var filled = await BulkAssignCustomersAsync(db, batchId);
+                _log.LogInformation("Bulk assigned CustomerId for {Count} payment(s) from lookups", filled);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Bulk assign of CustomerId from lookups failed; continuing with per-row resolution.");
+            }
+
             var payments = await db.Payments
                 .Where(p => p.BatchId == batchId && (p.Status == PaymentStatus.Imported || p.Status == PaymentStatus.NeedsReview))
                 .Include(p => p.Lines)
@@ -36,8 +48,6 @@ namespace CashBatch.Infrastructure.Services
             var importedCount = payments.Count(p => p.Status == PaymentStatus.Imported);
             var needsCount = payments.Count(p => p.Status == PaymentStatus.NeedsReview);
             _log.LogInformation("Found {Imported} imported and {Needs} needs-review payments to process", importedCount, needsCount);
-
-            await using var tx = await db.Database.BeginTransactionAsync();
 
             foreach (var p in payments)
             {
@@ -76,12 +86,49 @@ namespace CashBatch.Infrastructure.Services
                             .ToList();
                         foreach (var tl in trackedLines) tl.State = EntityState.Detached;
 
-                        var newLines = match.Select(m => new PaymentLine
+                        var newLines = match.Select(m =>
                         {
-                            PaymentId = p.Id,
-                            InvoiceNo = m.Item1.InvoiceNo,
-                            AppliedAmount = m.Item2,
-                            WasAutoMatched = true
+                            var info = m.Item1;
+                            var applied = m.Item2;
+                            // Determine which optional deductions were taken to reach the applied amount
+                            // Compare against 4 possibilities: Full, LessFreight, LessTerms, LessBoth
+                            const decimal eps = 0.01m;
+                            var full = Math.Round(info.AmountRemaining, 2, MidpointRounding.AwayFromZero);
+                            var lessFreight = Math.Round(Math.Max(info.AmountRemaining - info.FreightAllowedAmt, 0m), 2, MidpointRounding.AwayFromZero);
+                            var lessTerms = Math.Round(Math.Max(info.AmountRemaining - info.TermsAmount, 0m), 2, MidpointRounding.AwayFromZero);
+                            var lessBoth = Math.Round(Math.Max(info.AmountRemaining - info.FreightAllowedAmt - info.TermsAmount, 0m), 2, MidpointRounding.AwayFromZero);
+
+                            decimal? freightTaken = null;
+                            decimal? termsTaken = null;
+                            if (Math.Abs(applied - full) <= eps)
+                            {
+                                // none taken
+                            }
+                            else if (Math.Abs(applied - lessFreight) <= eps)
+                            {
+                                freightTaken = Math.Round(info.FreightAllowedAmt, 2, MidpointRounding.AwayFromZero);
+                            }
+                            else if (Math.Abs(applied - lessTerms) <= eps)
+                            {
+                                termsTaken = Math.Round(info.TermsAmount, 2, MidpointRounding.AwayFromZero);
+                            }
+                            else if (Math.Abs(applied - lessBoth) <= eps)
+                            {
+                                freightTaken = Math.Round(info.FreightAllowedAmt, 2, MidpointRounding.AwayFromZero);
+                                termsTaken = Math.Round(info.TermsAmount, 2, MidpointRounding.AwayFromZero);
+                            }
+
+                            return new PaymentLine
+                            {
+                                PaymentId = p.Id,
+                                PaymentNumber = p.PaymentNumber,
+                                InvoiceNo = info.InvoiceNo,
+                                AppliedAmount = applied,
+                                WasAutoMatched = true,
+                                FreightTakenAmt = freightTaken,
+                                TermsTakenAmt = termsTaken,
+                                BranchId = info.BranchId
+                            };
                         }).ToList();
 
                         // Insert lines explicitly via DbSet to guarantee tracking and persistence
@@ -124,6 +171,50 @@ namespace CashBatch.Infrastructure.Services
             _log.LogInformation("Auto-apply finished for batch {BatchId}", batchId);
         }
 
+        private async Task<int> BulkAssignCustomersAsync(AppDbContext db, Guid batchId)
+        {
+            // Only update rows where CustomerId is null/empty/'0'
+            var updated = 0;
+
+            // Highest confidence: composite BankNumber|AccountNumber (or BankAccount fallback)
+            updated += await db.Database.ExecuteSqlRawAsync(@"
+UPDATE p
+SET p.CustomerId = l.CustomerId
+FROM [dbo].[cash_payments] p
+JOIN [dbo].[cash_customer_lookups] l
+  ON l.[KeyType] = 'BankRouteAcct'
+ AND l.[KeyValue] = CONCAT(ISNULL(p.[BankNumber], ''), '|', COALESCE(NULLIF(p.[AccountNumber], ''), p.[BankAccount], ''))
+WHERE p.[BatchId] = {0}
+  AND (p.[CustomerId] IS NULL OR LTRIM(RTRIM(p.[CustomerId])) IN ('', '0'))
+", batchId);
+
+            // Next: direct Bank Account lookup
+            updated += await db.Database.ExecuteSqlRawAsync(@"
+UPDATE p
+SET p.CustomerId = l.CustomerId
+FROM [dbo].[cash_payments] p
+JOIN [dbo].[cash_customer_lookups] l
+  ON l.[KeyType] = 'BankAcct'
+ AND l.[KeyValue] = COALESCE(NULLIF(p.[AccountNumber], ''), p.[BankAccount])
+WHERE p.[BatchId] = {0}
+  AND (p.[CustomerId] IS NULL OR LTRIM(RTRIM(p.[CustomerId])) IN ('', '0'))
+", batchId);
+
+            // Finally: remit address hash lookup
+            updated += await db.Database.ExecuteSqlRawAsync(@"
+UPDATE p
+SET p.CustomerId = l.CustomerId
+FROM [dbo].[cash_payments] p
+JOIN [dbo].[cash_customer_lookups] l
+  ON l.[KeyType] = 'AddrHash'
+ AND l.[KeyValue] = p.[RemitAddressHash]
+WHERE p.[BatchId] = {0}
+  AND (p.[CustomerId] IS NULL OR LTRIM(RTRIM(p.[CustomerId])) IN ('', '0'))
+", batchId);
+
+            return updated;
+        }
+
         private async Task<string?> ResolveCustomerAsync(AppDbContext db, Payment p)
         {
             // Use lookups from the CustomerLookups table
@@ -140,7 +231,7 @@ namespace CashBatch.Infrastructure.Services
             return viaAddr?.CustomerId;
         }
 
-        private sealed record InvoiceInfo(string InvoiceNo, decimal AmountRemaining, decimal FreightAllowedAmt, DateTime? NetDueDate);
+        private sealed record InvoiceInfo(string InvoiceNo, decimal AmountRemaining, decimal FreightAllowedAmt, decimal TermsAmount, DateTime? NetDueDate, string? BranchId);
 
         private async Task<IEnumerable<InvoiceInfo>> GetOpenInvoicesAsync(string customerId)
         {
@@ -260,8 +351,10 @@ namespace CashBatch.Infrastructure.Services
                         if (!string.IsNullOrWhiteSpace(inv))
                         {
                             TryGetDecimal(dict, out var freight, "freight_allowed_amt", "freight_allowed", "freight", "FreightAllowedAmt");
+                            TryGetDecimal(dict, out var terms, "terms_amount", "terms_amt", "TermsAmount");
                             var due = TryGetDate(dict, "net_due_date", "net_due", "due_date", "NetDueDate");
-                            list.Add(new InvoiceInfo(inv!, amt, Math.Max(freight, 0m), due));
+                            var branchId = TryGetString(dict, "branch_id", "BranchId", "branchid", "branch");
+                            list.Add(new InvoiceInfo(inv!, amt, Math.Max(freight, 0m), Math.Max(terms, 0m), due, string.IsNullOrWhiteSpace(branchId) ? null : branchId));
                         }
                     }
                 }
@@ -275,11 +368,17 @@ namespace CashBatch.Infrastructure.Services
                         decimal amt = (decimal)(d.amount_remaining ?? d.open_amount ?? d.balance ?? d.amount_due ?? d.balance_remaining ?? d.amount_open ?? d.AmountRemaining);
                         amt = Math.Round(amt, 2, MidpointRounding.AwayFromZero);
                         decimal freight = 0m;
+                        decimal terms = 0m;
                         try { freight = (decimal)(d.freight_allowed_amt ?? d.freight_allowed ?? d.freight ?? d.FreightAllowedAmt ?? 0m); } catch { }
                         freight = Math.Max(Math.Round(freight, 2, MidpointRounding.AwayFromZero), 0m);
+                        try { terms = (decimal)(d.terms_amount ?? d.TermsAmount ?? d.terms_amt ?? 0m); } catch { }
+                        terms = Math.Max(Math.Round(terms, 2, MidpointRounding.AwayFromZero), 0m);
                         DateTime? due = null;
                         try { due = (DateTime?)(d.net_due_date ?? d.net_due ?? d.due_date ?? d.NetDueDate); } catch { }
-                        list.Add(new InvoiceInfo(inv, amt, freight, due));
+                        string? branchId = null;
+                        try { branchId = (string?)(d.branch_id ?? d.BranchId ?? d.branchid ?? d.branch); } catch { }
+                        if (string.IsNullOrWhiteSpace(branchId)) branchId = null;
+                        list.Add(new InvoiceInfo(inv, amt, freight, terms, due, branchId));
                     }
                     catch (Exception ex)
                     {
@@ -296,13 +395,14 @@ namespace CashBatch.Infrastructure.Services
             {
                 // Log a few examples for diagnostics
                 foreach (var exRow in list.Take(5))
-                    _log.LogInformation("Invoice candidate: {Inv} AmountRemaining={Amt} FreightAllowed={Freight}", exRow.InvoiceNo, exRow.AmountRemaining, exRow.FreightAllowedAmt);
+                    _log.LogInformation("Invoice candidate: {Inv} AmountRemaining={Amt} FreightAllowed={Freight} TermsAmount={Terms} BranchId={BranchId}", exRow.InvoiceNo, exRow.AmountRemaining, exRow.FreightAllowedAmt, exRow.TermsAmount, exRow.BranchId);
             }
 
             return list;
         }
 
-        // Try to find exact match allowing each invoice to be applied as either AmountRemaining OR AmountRemaining - FreightAllowedAmt.
+        // Try to find exact match allowing each invoice to be applied as one of:
+        // AmountRemaining, AmountRemaining - FreightAllowedAmt, AmountRemaining - TermsAmount, AmountRemaining - FreightAllowedAmt - TermsAmount.
         // This supports mixed combinations per-invoice.
         private List<(InvoiceInfo Info, decimal AppliedAmount)>? TryFindExactMatch(
             IEnumerable<InvoiceInfo> invoices, decimal amount)
@@ -315,15 +415,19 @@ namespace CashBatch.Infrastructure.Services
                 {
                     Info = x,
                     Full = Math.Round(x.AmountRemaining, 2, MidpointRounding.AwayFromZero),
-                    Less = Math.Round(Math.Max(x.AmountRemaining - x.FreightAllowedAmt, 0m), 2, MidpointRounding.AwayFromZero)
+                    LessFreight = Math.Round(Math.Max(x.AmountRemaining - x.FreightAllowedAmt, 0m), 2, MidpointRounding.AwayFromZero),
+                    LessTerms = Math.Round(Math.Max(x.AmountRemaining - x.TermsAmount, 0m), 2, MidpointRounding.AwayFromZero),
+                    LessBoth = Math.Round(Math.Max(x.AmountRemaining - x.FreightAllowedAmt - x.TermsAmount, 0m), 2, MidpointRounding.AwayFromZero)
                 })
                 .Select(x => new
                 {
                     x.Info,
                     Full = x.Full,
-                    Less = x.Less,
-                    HasLess = x.Less > 0m && Math.Abs(x.Less - x.Full) > epsilon,
-                    Max = Math.Max(x.Full, x.Less),
+                    LessFreight = x.LessFreight,
+                    LessTerms = x.LessTerms,
+                    LessBoth = x.LessBoth,
+                    Choices = new decimal[] { x.Full, x.LessFreight, x.LessTerms, x.LessBoth }.Distinct().Where(v => v > 0m).OrderByDescending(v => v).ToArray(),
+                    Max = new decimal[] { x.Full, x.LessFreight, x.LessTerms, x.LessBoth }.Max(),
                     Due = x.Info.NetDueDate ?? DateTime.MaxValue
                 })
                 .OrderByDescending(i => i.Max)
@@ -336,8 +440,10 @@ namespace CashBatch.Infrastructure.Services
             // 1) Single-invoice check (either choice)
             foreach (var it in items)
             {
-                if (Math.Abs(it.Full - amount) <= epsilon) return new() { (it.Info, it.Full) };
-                if (it.HasLess && Math.Abs(it.Less - amount) <= epsilon) return new() { (it.Info, it.Less) };
+                foreach (var c in it.Choices)
+                {
+                    if (Math.Abs(c - amount) <= epsilon) return new() { (it.Info, c) };
+                }
             }
 
             // Cap the search set for combinatorial steps
@@ -347,11 +453,11 @@ namespace CashBatch.Infrastructure.Services
             for (int i = 0; i < capped.Count; i++)
             {
                 var a = capped[i];
-                var aVals = a.HasLess ? new[] { a.Full, a.Less } : new[] { a.Full };
+                var aVals = a.Choices;
                 for (int j = i + 1; j < capped.Count; j++)
                 {
                     var b = capped[j];
-                    var bVals = b.HasLess ? new[] { b.Full, b.Less } : new[] { b.Full };
+                    var bVals = b.Choices;
                     foreach (var av in aVals)
                     foreach (var bv in bVals)
                     {
@@ -373,21 +479,7 @@ namespace CashBatch.Infrastructure.Services
                 var res = new List<(InvoiceInfo, decimal)>();
                 foreach (var it in sorted)
                 {
-                    var choice = it.Full;
-                    if (it.HasLess)
-                    {
-                        var dFull = Math.Abs(remaining - it.Full);
-                        var dLess = Math.Abs(remaining - it.Less);
-                        if (Math.Abs(dLess - dFull) <= 0.00001m)
-                        {
-                            // tie-breaker: prefer the smaller choice to avoid overshoot and keep room for others
-                            choice = Math.Min(it.Full, it.Less);
-                        }
-                        else
-                        {
-                            choice = dLess < dFull ? it.Less : it.Full;
-                        }
-                    }
+                    var choice = it.Choices.OrderBy(c => Math.Abs(remaining - c)).ThenBy(c => c).FirstOrDefault();
                     if (choice <= remaining + epsilon && choice > 0)
                     {
                         res.Add((it.Info, choice));
@@ -416,26 +508,16 @@ namespace CashBatch.Infrastructure.Services
                 if (sum + suffixMax[idx] < amount - epsilon) return; // even with all remaining max we can't reach target
 
                 var it = order[idx];
-
-                // Option 1: include full
-                if (it.Full > 0)
+                // Try each choice value for this invoice
+                foreach (var c in it.Choices)
                 {
-                    current.Add((it.Info, it.Full));
-                    Dfs(idx + 1, sum + it.Full);
+                    if (c <= 0) continue;
+                    current.Add((it.Info, c));
+                    Dfs(idx + 1, sum + c);
                     current.RemoveAt(current.Count - 1);
                     if (best != null) return;
                 }
-
-                // Option 2: include less (if available and different)
-                if (it.HasLess)
-                {
-                    current.Add((it.Info, it.Less));
-                    Dfs(idx + 1, sum + it.Less);
-                    current.RemoveAt(current.Count - 1);
-                    if (best != null) return;
-                }
-
-                // Option 3: skip
+                // Skip
                 Dfs(idx + 1, sum);
             }
 

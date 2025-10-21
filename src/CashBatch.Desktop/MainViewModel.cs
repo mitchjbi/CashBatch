@@ -5,6 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using CashBatch.Application;
 using Microsoft.Win32;
+using Microsoft.Extensions.Configuration;
+using CashBatch.Desktop.Services;
 
 namespace CashBatch.Desktop;
 
@@ -15,6 +17,8 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly IMatchingService _match;
     private readonly IERPExportService _export;
     private readonly ILookupService _lookup;
+    private readonly IConfiguration _cfg;
+    private readonly IUserSettingsService _userSettings;
 
     public ObservableCollection<BatchDto> Batches { get; } = new();
     public ObservableCollection<PaymentDto> Payments { get; } = new();
@@ -61,9 +65,9 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isBusy;
     public bool IsBusy { get => _isBusy; set { _isBusy = value; OnPropertyChanged(); } }
 
-    public MainViewModel(IBatchService batches, IImportService import, IMatchingService match, IERPExportService export, ILookupService lookup)
+    public MainViewModel(IBatchService batches, IImportService import, IMatchingService match, IERPExportService export, ILookupService lookup, IConfiguration cfg, IUserSettingsService userSettings)
     {
-        _batches = batches; _import = import; _match = match; _export = export; _lookup = lookup;
+        _batches = batches; _import = import; _match = match; _export = export; _lookup = lookup; _cfg = cfg; _userSettings = userSettings;
 
         ImportCommand = new RelayCommand(async _ => await ImportFile());
         AutoApplyCommand = new RelayCommand(async _ => await AutoApply());
@@ -72,6 +76,17 @@ public class MainViewModel : INotifyPropertyChanged
         var assignCmd = new RelayCommand(async _ => await AssignCustomer(), _ => SelectedPayment != null);
         AssignCustomerCommand = assignCmd;
         OpenExportSettingsCommand = new RelayCommand(_ => { OpenExportSettings(); return Task.CompletedTask; });
+
+        // Initialize export settings from per-user settings (falls back to empty)
+        var user = _userSettings.Load();
+        if (user.FiscalYear.HasValue) ExportFiscalYear = user.FiscalYear.Value;
+        if (user.Period.HasValue) ExportPeriod = user.Period.Value;
+        ExportBankNumber = user.BankNumber ?? string.Empty;
+        ExportGLBankAccountNumber = user.GLBankAccountNumber ?? string.Empty;
+        ExportARAccountNumber = user.ARAccountNumber ?? string.Empty;
+        ExportTermsAccountNumber = user.TermsAccountNumber ?? string.Empty;
+        ExportAllowedAccountNumber = user.AllowedAccountNumber ?? string.Empty;
+        ExportDirectory = user.ExportDirectory ?? string.Empty;
 
         _ = LoadRecentBatchesAsync();
     }
@@ -101,7 +116,7 @@ public class MainViewModel : INotifyPropertyChanged
 
     private async Task ImportFile()
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Import Bank File",
             Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
@@ -147,7 +162,77 @@ public class MainViewModel : INotifyPropertyChanged
             IsBusy = false;
         }
     }
-    private Task Export() => Task.CompletedTask;
+    private async Task Export()
+    {
+        if (SelectedBatch == null) return;
+        // Prompt for deposit number, period, and year (pre-filled from current settings)
+        var dlg = new ExportAutoAppliedWindow
+        {
+            Owner = System.Windows.Application.Current?.MainWindow,
+            DepositNumber = string.Empty,
+            Period = ExportPeriod,
+            FiscalYear = ExportFiscalYear
+        };
+        var ok = dlg.ShowDialog() == true;
+        if (!ok) return;
+
+        // Update period/year from dialog back to settings and persist
+        ExportPeriod = dlg.Period;
+        ExportFiscalYear = dlg.FiscalYear;
+        _userSettings.Save(new ExportSettingsData
+        {
+            FiscalYear = ExportFiscalYear,
+            Period = ExportPeriod,
+            BankNumber = ExportBankNumber,
+            GLBankAccountNumber = ExportGLBankAccountNumber,
+            ARAccountNumber = ExportARAccountNumber,
+            TermsAccountNumber = ExportTermsAccountNumber,
+            AllowedAccountNumber = ExportAllowedAccountNumber,
+            ExportDirectory = ExportDirectory
+        });
+
+        // Validate required settings
+        if (string.IsNullOrWhiteSpace(ExportDirectory) ||
+            string.IsNullOrWhiteSpace(ExportBankNumber) ||
+            string.IsNullOrWhiteSpace(ExportGLBankAccountNumber) ||
+            string.IsNullOrWhiteSpace(ExportARAccountNumber) ||
+            string.IsNullOrWhiteSpace(ExportTermsAccountNumber) ||
+            string.IsNullOrWhiteSpace(ExportAllowedAccountNumber))
+        {
+            System.Windows.MessageBox.Show("Missing required export settings. Please open Settings and complete all fields.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(dlg.DepositNumber))
+        {
+            System.Windows.MessageBox.Show("Please enter a Deposit Number.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            return;
+        }
+        try
+        {
+            IsBusy = true;
+            var options = new ExportOptions(
+                ExportDirectory,
+                ExportFiscalYear,
+                ExportPeriod,
+                ExportBankNumber,
+                ExportGLBankAccountNumber,
+                ExportARAccountNumber,
+                ExportTermsAccountNumber,
+                ExportAllowedAccountNumber,
+                dlg.DepositNumber!
+            );
+            var count = await _export.ExportAutoAppliedAsync(SelectedBatch.Id, options);
+            System.Windows.MessageBox.Show($"Exported {count} payment(s) to '{ExportDirectory}'.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "Export Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
     private Task Print() => Task.CompletedTask;
 
     // Export settings captured from the settings window
@@ -156,19 +241,58 @@ public class MainViewModel : INotifyPropertyChanged
     public int ExportPeriod { get => _exportPeriod; set { _exportPeriod = value; OnPropertyChanged(); } }
     private int _exportPeriod = 1;
 
+    // New export accounting settings (strings, editable in dialog)
+    public string ExportBankNumber { get => _exportBankNumber; set { _exportBankNumber = value; OnPropertyChanged(); } }
+    private string _exportBankNumber = string.Empty;
+    public string ExportGLBankAccountNumber { get => _exportGLBankAccountNumber; set { _exportGLBankAccountNumber = value; OnPropertyChanged(); } }
+    private string _exportGLBankAccountNumber = string.Empty;
+    public string ExportARAccountNumber { get => _exportARAccountNumber; set { _exportARAccountNumber = value; OnPropertyChanged(); } }
+    private string _exportARAccountNumber = string.Empty;
+    public string ExportTermsAccountNumber { get => _exportTermsAccountNumber; set { _exportTermsAccountNumber = value; OnPropertyChanged(); } }
+    private string _exportTermsAccountNumber = string.Empty;
+    public string ExportAllowedAccountNumber { get => _exportAllowedAccountNumber; set { _exportAllowedAccountNumber = value; OnPropertyChanged(); } }
+    private string _exportAllowedAccountNumber = string.Empty;
+    public string ExportDirectory { get => _exportDirectory; set { _exportDirectory = value; OnPropertyChanged(); } }
+    private string _exportDirectory = string.Empty;
+
     private void OpenExportSettings()
     {
         var win = new ExportSettingsWindow
         {
             Owner = System.Windows.Application.Current?.MainWindow,
             FiscalYear = ExportFiscalYear,
-            Period = ExportPeriod
+            Period = ExportPeriod,
+            BankNumber = ExportBankNumber,
+            GLBankAccountNumber = ExportGLBankAccountNumber,
+            ARAccountNumber = ExportARAccountNumber,
+            TermsAccountNumber = ExportTermsAccountNumber,
+            AllowedAccountNumber = ExportAllowedAccountNumber,
+            ExportDirectory = ExportDirectory
         };
         var result = win.ShowDialog();
         if (result == true)
         {
             ExportFiscalYear = win.FiscalYear;
             ExportPeriod = win.Period;
+            ExportBankNumber = win.BankNumber ?? string.Empty;
+            ExportGLBankAccountNumber = win.GLBankAccountNumber ?? string.Empty;
+            ExportARAccountNumber = win.ARAccountNumber ?? string.Empty;
+            ExportTermsAccountNumber = win.TermsAccountNumber ?? string.Empty;
+            ExportAllowedAccountNumber = win.AllowedAccountNumber ?? string.Empty;
+            ExportDirectory = win.ExportDirectory ?? string.Empty;
+
+            // Persist to per-user settings
+            _userSettings.Save(new ExportSettingsData
+            {
+                FiscalYear = ExportFiscalYear,
+                Period = ExportPeriod,
+                BankNumber = ExportBankNumber,
+                GLBankAccountNumber = ExportGLBankAccountNumber,
+                ARAccountNumber = ExportARAccountNumber,
+                TermsAccountNumber = ExportTermsAccountNumber,
+                AllowedAccountNumber = ExportAllowedAccountNumber,
+                ExportDirectory = ExportDirectory
+            });
         }
     }
 
@@ -196,11 +320,21 @@ public class MainViewModel : INotifyPropertyChanged
         if (sel == null) return;
         try
         {
-            // Simple prompt for customer id
+            // Simple prompt for customer id, augmented with possible suggestion from SP
             string? current = sel.CustomerId;
             var bank = sel.BankNumber ?? "";
             var acct = sel.AccountNumber ?? sel.BankAccount ?? "";
-            string prompt = $"Assign Customer for{Environment.NewLine}Bank Number: {bank}{Environment.NewLine}Account Number: {acct}";
+
+            string? possible = null;
+            if (sel.InvoiceNumber.HasValue)
+            {
+                try { possible = await _batches.GetPossibleCustomerIdAsync(sel.InvoiceNumber.Value); }
+                catch { /* non-fatal for UI prompt */ }
+            }
+
+            // Always show the title 'Possible Customer ID' under the existing data
+            var possibleText = possible ?? string.Empty;
+            string prompt = $"Assign Customer for{Environment.NewLine}Bank Number: {bank}{Environment.NewLine}Account Number: {acct}{Environment.NewLine}{Environment.NewLine}Possible Customer ID: {possibleText}";
             string title = "Assign Customer";
             string input = Microsoft.VisualBasic.Interaction.InputBox(prompt, title, current ?? string.Empty);
             if (string.IsNullOrWhiteSpace(input)) return;

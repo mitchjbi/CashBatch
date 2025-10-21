@@ -9,6 +9,7 @@ using CashBatch.Infrastructure;
 using CashBatch.Infrastructure.Services;
 using CashBatch.Integration;
 using Microsoft.EntityFrameworkCore;
+using CashBatch.Desktop.Services;
 
 namespace CashBatch.Desktop;
 
@@ -43,6 +44,7 @@ public partial class App : System.Windows.Application
                 services.AddScoped<IBatchService, BatchService>();
                 services.AddScoped<ILookupService, LookupService>();
                 services.AddScoped<IERPExportService, ERPExportService>();
+                services.AddSingleton<IUserSettingsService, UserSettingsService>();
 
                 // ViewModels / Views (scoped to UI scope)
                 services.AddScoped<MainViewModel>();
@@ -76,7 +78,7 @@ public partial class App : System.Windows.Application
     private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
         Serilog.Log.Error(e.Exception, "Unhandled UI exception");
-        MessageBox.Show(e.Exception.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        System.Windows.MessageBox.Show(e.Exception.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
     }
 

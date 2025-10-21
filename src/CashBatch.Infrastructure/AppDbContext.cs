@@ -28,10 +28,14 @@ public class AppDbContext : DbContext
         b.Entity<CustomerLookup>().HasIndex(x => new { x.KeyType, x.KeyValue }).IsUnique();
         b.Entity<Payment>().Property(p => p.Amount).HasColumnType("decimal(18,2)");
         b.Entity<PaymentLine>().Property(p => p.AppliedAmount).HasColumnType("decimal(18,2)");
+        b.Entity<PaymentLine>().Property(p => p.FreightTakenAmt).HasColumnType("decimal(18,2)");
+        b.Entity<PaymentLine>().Property(p => p.TermsTakenAmt).HasColumnType("decimal(18,2)");
+        b.Entity<PaymentLine>().Property(p => p.BranchId).HasMaxLength(8);
 
         // Additional properties introduced for CSV import
         b.Entity<Batch>().Property(p => p.DepositDate);
         b.Entity<Batch>().Property(p => p.CustomerBatchNumber);
+        b.Entity<Batch>().Property(p => p.DepositNumber);
         b.Entity<Payment>().Property(p => p.SequenceNumber);
         b.Entity<Payment>().Property(p => p.BankNumber);
         b.Entity<Payment>().Property(p => p.AccountNumber);
@@ -41,5 +45,17 @@ public class AppDbContext : DbContext
         b.Entity<Payment>().Property(p => p.OriginalCustomerId);
         b.Entity<Payment>().Property(p => p.TransactionType);
         b.Entity<Payment>().Property(p => p.Category);
+
+        // New numeric identity for payments, unique index for lookups/exports
+        b.Entity<Payment>()
+            .Property(p => p.PaymentNumber)
+            .HasColumnType("decimal(19,0)")
+            .UseIdentityColumn();
+        b.Entity<Payment>()
+            .HasIndex(p => p.PaymentNumber)
+            .IsUnique();
+
+        // Expose denormalized PaymentNumber on lines
+        b.Entity<PaymentLine>().Property(l => l.PaymentNumber).HasColumnType("decimal(19,0)");
     }
 }
