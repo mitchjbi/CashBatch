@@ -12,9 +12,9 @@ public class ImportService : IImportService
     private readonly ILogger<ImportService> _log;
     public ImportService(AppDbContext db, ILogger<ImportService> log) { _db = db; _log = log; }
 
-    public async Task<BatchDto> ImportAsync(string filePath, string importedBy)
+    public async Task<BatchDto> ImportAsync(string filePath, string importedBy, string? depositNumber)
     {
-        var batch = new Batch { ImportedAt = DateTime.Now, ImportedBy = importedBy, SourceFilename = Path.GetFileName(filePath) };
+        var batch = new Batch { ImportedAt = DateTime.Now, ImportedBy = importedBy, SourceFilename = Path.GetFileName(filePath), DepositNumber = string.IsNullOrWhiteSpace(depositNumber) ? null : depositNumber };
         _db.Batches.Add(batch);
 
         using var reader = new StreamReader(filePath);
@@ -95,7 +95,7 @@ public class ImportService : IImportService
             _db.Payments.Add(p);
         }
         await _db.SaveChangesAsync();
-        return new BatchDto(batch.Id, batch.ImportedAt, batch.ImportedBy, batch.SourceFilename, batch.Status.ToString());
+        return new BatchDto(batch.Id, batch.DepositNumber, batch.ImportedAt, batch.ImportedBy, batch.SourceFilename, batch.Status.ToString());
     }
 
     // No remit address in the provided CSV sample; keep placeholder for potential future use.

@@ -116,17 +116,14 @@ public class MainViewModel : INotifyPropertyChanged
 
     private async Task ImportFile()
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog
+        var win = new ImportBankFileWindow
         {
-            Title = "Import Bank File",
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            CheckFileExists = true,
-            Multiselect = false
+            Owner = System.Windows.Application.Current?.MainWindow
         };
-        var ok = dlg.ShowDialog() == true;
+        var ok = win.ShowDialog() == true;
         if (!ok) return;
 
-        var result = await _import.ImportAsync(dlg.FileName, Environment.UserName);
+        var result = await _import.ImportAsync(win.FilePath!, Environment.UserName, win.DepositNumber);
 
         // Refresh batches and select the newly imported one
         await LoadRecentBatchesAsync();
@@ -169,7 +166,7 @@ public class MainViewModel : INotifyPropertyChanged
         var dlg = new ExportAutoAppliedWindow
         {
             Owner = System.Windows.Application.Current?.MainWindow,
-            DepositNumber = string.Empty,
+            DepositNumber = SelectedBatch?.DepositNumber ?? string.Empty,
             Period = ExportPeriod,
             FiscalYear = ExportFiscalYear
         };

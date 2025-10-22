@@ -29,7 +29,7 @@ public class BatchService : IBatchService
         return await db.Batches.AsNoTracking()
             .OrderByDescending(b => b.ImportedAt)
             .Take(take)
-            .Select(b => new BatchDto(b.Id, b.ImportedAt, b.ImportedBy, b.SourceFilename, b.Status.ToString()))
+            .Select(b => new BatchDto(b.Id, b.DepositNumber, b.ImportedAt, b.ImportedBy, b.SourceFilename, b.Status.ToString()))
             .ToListAsync();
     }
 

@@ -1,6 +1,6 @@
 ﻿namespace CashBatch.Application;
 
-public record BatchDto(Guid Id, DateTime ImportedAt, string ImportedBy, string SourceFilename, string Status);
+public record BatchDto(Guid Id, string? DepositNumber, DateTime ImportedAt, string ImportedBy, string SourceFilename, string Status);
 public record PaymentDto(
     Guid Id,
     Guid BatchId,
@@ -34,7 +34,7 @@ public record ExportOptions(
 
 public interface IImportService
 {
-    Task<BatchDto> ImportAsync(string filePath, string importedBy);
+    Task<BatchDto> ImportAsync(string filePath, string importedBy, string? depositNumber);
 }
 
 public interface IMatchingService

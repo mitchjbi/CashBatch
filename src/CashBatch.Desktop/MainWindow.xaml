@@ -19,7 +19,15 @@
 
         <TabControl Margin="8" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
             <TabItem Header="Batches">
-                <DataGrid ItemsSource="{Binding Batches}" SelectedItem="{Binding SelectedBatch}" IsReadOnly="True"/>
+                <DataGrid ItemsSource="{Binding Batches}" SelectedItem="{Binding SelectedBatch}" IsReadOnly="True" AutoGenerateColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Deposit #" Binding="{Binding DepositNumber}" Width="*"/>
+                        <DataGridTextColumn Header="Imported At" Binding="{Binding ImportedAt}" Width="*"/>
+                        <DataGridTextColumn Header="Imported By" Binding="{Binding ImportedBy}" Width="*"/>
+                        <DataGridTextColumn Header="Source File" Binding="{Binding SourceFilename}" Width="*"/>
+                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
             </TabItem>
             <TabItem Header="Payments">
                 <DockPanel>
