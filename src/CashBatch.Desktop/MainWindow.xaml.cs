@@ -24,4 +24,14 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = vm;
     }
+
+    // Hide columns Id and BatchId on Needs Review grid
+    private void NeedsReviewGrid_AutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(Application.PaymentDto.Id), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(e.PropertyName, nameof(Application.PaymentDto.BatchId), StringComparison.OrdinalIgnoreCase))
+        {
+            e.Cancel = true;
+        }
+    }
 }

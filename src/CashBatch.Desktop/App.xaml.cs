@@ -44,6 +44,7 @@ public partial class App : System.Windows.Application
                 services.AddScoped<IBatchService, BatchService>();
                 services.AddScoped<ILookupService, LookupService>();
                 services.AddScoped<IERPExportService, ERPExportService>();
+                services.AddScoped<ITemplateService, TemplateService>();
                 services.AddSingleton<IUserSettingsService, UserSettingsService>();
 
                 // ViewModels / Views (scoped to UI scope)
@@ -78,7 +79,12 @@ public partial class App : System.Windows.Application
     private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
         Serilog.Log.Error(e.Exception, "Unhandled UI exception");
-        System.Windows.MessageBox.Show(e.Exception.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        var msg = e.Exception.Message;
+        if (e.Exception.InnerException != null)
+        {
+            msg += System.Environment.NewLine + System.Environment.NewLine + "Details: " + e.Exception.InnerException.Message;
+        }
+        System.Windows.MessageBox.Show(msg, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
     }
 

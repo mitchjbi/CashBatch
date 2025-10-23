@@ -3,10 +3,12 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using System;
 using CashBatch.Application;
 using Microsoft.Win32;
 using Microsoft.Extensions.Configuration;
 using CashBatch.Desktop.Services;
+using CashBatch.Reporting;
 
 namespace CashBatch.Desktop;
 
@@ -17,6 +19,7 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly IMatchingService _match;
     private readonly IERPExportService _export;
     private readonly ILookupService _lookup;
+    private readonly ITemplateService _templates;
     private readonly IConfiguration _cfg;
     private readonly IUserSettingsService _userSettings;
 
@@ -39,6 +42,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand PrintCommand { get; }
     public ICommand AssignCustomerCommand { get; }
     public ICommand OpenExportSettingsCommand { get; }
+    public ICommand CloseBatchCommand { get; }
 
     private PaymentDto? _selectedPayment;
     public PaymentDto? SelectedPayment
@@ -48,6 +52,8 @@ public class MainViewModel : INotifyPropertyChanged
         {
             _selectedPayment = value;
             OnPropertyChanged();
+            // Update command enablement based on payment selection and required fields
+            (AssignCustomerCommand as RelayCommand)?.RaiseCanExecuteChanged();
             // Load applied lines whenever the selection changes
             _ = LoadAppliedAsync();
         }
@@ -65,17 +71,22 @@ public class MainViewModel : INotifyPropertyChanged
     private bool _isBusy;
     public bool IsBusy { get => _isBusy; set { _isBusy = value; OnPropertyChanged(); } }
 
-    public MainViewModel(IBatchService batches, IImportService import, IMatchingService match, IERPExportService export, ILookupService lookup, IConfiguration cfg, IUserSettingsService userSettings)
+    public MainViewModel(IBatchService batches, IImportService import, IMatchingService match, IERPExportService export, ILookupService lookup, IConfiguration cfg, IUserSettingsService userSettings, ITemplateService templates)
     {
-        _batches = batches; _import = import; _match = match; _export = export; _lookup = lookup; _cfg = cfg; _userSettings = userSettings;
+        _batches = batches; _import = import; _match = match; _export = export; _lookup = lookup; _cfg = cfg; _userSettings = userSettings; _templates = templates;
 
         ImportCommand = new RelayCommand(async _ => await ImportFile());
         AutoApplyCommand = new RelayCommand(async _ => await AutoApply());
         ExportCommand = new RelayCommand(async _ => await Export());
         PrintCommand = new RelayCommand(async _ => await Print());
-        var assignCmd = new RelayCommand(async _ => await AssignCustomer(), _ => SelectedPayment != null);
+        var assignCmd = new RelayCommand(
+            async _ => await AssignCustomer(),
+            _ => SelectedPayment != null
+                 && !string.IsNullOrWhiteSpace(SelectedPayment.BankNumber)
+                 && !string.IsNullOrWhiteSpace(SelectedPayment.AccountNumber));
         AssignCustomerCommand = assignCmd;
         OpenExportSettingsCommand = new RelayCommand(_ => { OpenExportSettings(); return Task.CompletedTask; });
+        CloseBatchCommand = new RelayCommand(async param => await CloseSelectedBatchesAsync(param), _ => true);
 
         // Initialize export settings from per-user settings (falls back to empty)
         var user = _userSettings.Load();
@@ -88,16 +99,18 @@ public class MainViewModel : INotifyPropertyChanged
         ExportAllowedAccountNumber = user.AllowedAccountNumber ?? string.Empty;
         ExportDirectory = user.ExportDirectory ?? string.Empty;
 
+        // Default filter to Open
+        BatchFilter = "Open";
         _ = LoadRecentBatchesAsync();
     }
 
     private async Task LoadRecentBatchesAsync()
     {
-        var list = await _batches.GetRecentAsync();
+        var showClosed = string.Equals(BatchFilter, "Closed", StringComparison.OrdinalIgnoreCase);
+        var list = await _batches.GetRecentByStatusAsync(showClosed ? "Closed" : "Open", 100);
         Batches.Clear();
         foreach (var b in list) Batches.Add(b);
-        if (SelectedBatch == null && Batches.Count > 0)
-            SelectedBatch = Batches[0];
+        // Do not auto-select a batch
     }
 
     private async Task RefreshSelectedBatchAsync()
@@ -123,12 +136,11 @@ public class MainViewModel : INotifyPropertyChanged
         var ok = win.ShowDialog() == true;
         if (!ok) return;
 
-        var result = await _import.ImportAsync(win.FilePath!, Environment.UserName, win.DepositNumber);
+        var result = await _import.ImportAsync(win.FilePath!, Environment.UserName, win.BatchName, win.SelectedTemplateId);
 
         // Refresh batches and select the newly imported one
         await LoadRecentBatchesAsync();
-        var match = Batches.FirstOrDefault(b => b.Id == result.Id);
-        if (match != null) SelectedBatch = match;
+        // Do not auto-select newly imported batch
     }
 
     private async Task AutoApply()
@@ -162,11 +174,11 @@ public class MainViewModel : INotifyPropertyChanged
     private async Task Export()
     {
         if (SelectedBatch == null) return;
-        // Prompt for deposit number, period, and year (pre-filled from current settings)
+        // Prompt for batch name, period, and year (pre-filled from current settings)
         var dlg = new ExportAutoAppliedWindow
         {
             Owner = System.Windows.Application.Current?.MainWindow,
-            DepositNumber = SelectedBatch?.DepositNumber ?? string.Empty,
+            BatchName = SelectedBatch?.BatchName ?? string.Empty,
             Period = ExportPeriod,
             FiscalYear = ExportFiscalYear
         };
@@ -199,9 +211,9 @@ public class MainViewModel : INotifyPropertyChanged
             System.Windows.MessageBox.Show("Missing required export settings. Please open Settings and complete all fields.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
             return;
         }
-        if (string.IsNullOrWhiteSpace(dlg.DepositNumber))
+        if (string.IsNullOrWhiteSpace(dlg.BatchName))
         {
-            System.Windows.MessageBox.Show("Please enter a Deposit Number.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show("Please enter a Batch Name.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
             return;
         }
         try
@@ -216,7 +228,7 @@ public class MainViewModel : INotifyPropertyChanged
                 ExportARAccountNumber,
                 ExportTermsAccountNumber,
                 ExportAllowedAccountNumber,
-                dlg.DepositNumber!
+                dlg.BatchName!
             );
             var count = await _export.ExportAutoAppliedAsync(SelectedBatch.Id, options);
             System.Windows.MessageBox.Show($"Exported {count} payment(s) to '{ExportDirectory}'.", "Export", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
@@ -230,7 +242,57 @@ public class MainViewModel : INotifyPropertyChanged
             IsBusy = false;
         }
     }
-    private Task Print() => Task.CompletedTask;
+    private async Task Print()
+    {
+        try
+        {
+            var batch = SelectedBatch;
+            if (batch == null)
+            {
+                System.Windows.MessageBox.Show("Must select a batch first.", "Print", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                return;
+            }
+
+            var payments = await _batches.GetPaymentsAsync(batch.Id);
+            string? templateName = null;
+            if (batch.TemplateId.HasValue)
+            {
+                try
+                {
+                    var t = await _templates.GetByIdAsync(batch.TemplateId.Value);
+                    templateName = t?.Name;
+                }
+                catch { }
+            }
+
+            var templateId = batch.TemplateId ?? 0;
+            byte[] pdf;
+            if (templateId == 1)
+            {
+                pdf = Template1ReportBuilder.Build(batch, payments, templateName);
+            }
+            else if (templateId == 2)
+            {
+                pdf = Template2ReportBuilder.Build(batch, payments, templateName);
+            }
+            else if (templateId == 3)
+            {
+                pdf = Template3ReportBuilder.Build(batch, payments, templateName);
+            }
+            else
+            {
+                System.Windows.MessageBox.Show($"Printing for TemplateId {templateId} not implemented yet.", "Print", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                return;
+            }
+
+            // Open PDF for preview (no auto print)
+            PdfPrintService.PrintPdfBytes(pdf);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "Print Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+        }
+    }
 
     // Export settings captured from the settings window
     public int ExportFiscalYear { get => _exportFiscalYear; set { _exportFiscalYear = value; OnPropertyChanged(); } }
@@ -317,27 +379,44 @@ public class MainViewModel : INotifyPropertyChanged
         if (sel == null) return;
         try
         {
-            // Simple prompt for customer id, augmented with possible suggestion from SP
-            string? current = sel.CustomerId;
-            var bank = sel.BankNumber ?? "";
-            var acct = sel.AccountNumber ?? sel.BankAccount ?? "";
+            var bank = sel.BankNumber ?? string.Empty;
+            var acct = sel.AccountNumber ?? sel.BankAccount ?? string.Empty;
 
             string? possible = null;
-            if (sel.InvoiceNumber.HasValue)
+            string? name = null;
+            string? mailCity = null;
+            if (!string.IsNullOrWhiteSpace(sel.InvoiceNumber))
             {
-                try { possible = await _batches.GetPossibleCustomerIdAsync(sel.InvoiceNumber.Value); }
-                catch { /* non-fatal for UI prompt */ }
+                try
+                {
+                    var info = await _batches.GetCustomerLookupAsync(sel.InvoiceNumber);
+                    if (info != null)
+                    {
+                        possible = info.CustomerId;
+                        name = info.Name;
+                        mailCity = info.MailCity;
+                    }
+                }
+                catch { /* non-fatal */ }
             }
 
-            // Always show the title 'Possible Customer ID' under the existing data
-            var possibleText = possible ?? string.Empty;
-            string prompt = $"Assign Customer for{Environment.NewLine}Bank Number: {bank}{Environment.NewLine}Account Number: {acct}{Environment.NewLine}{Environment.NewLine}Possible Customer ID: {possibleText}";
-            string title = "Assign Customer";
-            string input = Microsoft.VisualBasic.Interaction.InputBox(prompt, title, current ?? string.Empty);
+            var win = new AssignCustomerWindow
+            {
+                Owner = System.Windows.Application.Current?.MainWindow,
+                BankNumber = bank,
+                AccountNumber = acct,
+                PossibleCustomerId = possible,
+                CustomerName = name,
+                MailCity = mailCity,
+                CustomerId = sel.CustomerId
+            };
+            var ok = win.ShowDialog() == true;
+            if (!ok) return;
+            var input = win.CustomerId;
             if (string.IsNullOrWhiteSpace(input)) return;
             if (input == "0") { System.Windows.MessageBox.Show("'0' is not a valid customer id."); return; }
 
-            await _batches.AssignCustomerAsync(sel.Id, input.Trim());
+            await _batches.AssignCustomerAsync(sel.Id, input!.Trim());
 
             // Refresh current batch lists
             await RefreshSelectedBatchAsync();
@@ -367,6 +446,75 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 System.Windows.MessageBox.Show(ex.Message, "Load Lookups Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
             }
+        }
+    }
+
+    // Batch filter (Open | Closed)
+    public string BatchFilter
+    {
+        get => _batchFilter;
+        set
+        {
+            if (_batchFilter != value)
+            {
+                _batchFilter = value;
+                OnPropertyChanged();
+                _ = LoadRecentBatchesAsync();
+            }
+        }
+    }
+    private string _batchFilter = "Open";
+
+    private async Task CloseSelectedBatchesAsync(object? param)
+    {
+        try
+        {
+            if (param is System.Collections.IEnumerable items)
+            {
+                var ids = new List<Guid>();
+                foreach (var it in items)
+                {
+                    if (it is BatchDto b) ids.Add(b.Id);
+                }
+                if (ids.Count == 0)
+                {
+                    // Fallback to single SelectedBatch
+                    if (SelectedBatch != null) ids.Add(SelectedBatch.Id);
+                }
+                if (ids.Count == 0) return;
+
+                var confirm = System.Windows.MessageBox.Show(
+                    $"Confirm you want to close the selected batch{(ids.Count > 1 ? "es" : string.Empty)}?",
+                    "Close Batch",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Question);
+                if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+                IsBusy = true;
+                await _batches.CloseBatchesAsync(ids);
+                await LoadRecentBatchesAsync();
+            }
+            else if (SelectedBatch != null)
+            {
+                var confirm = System.Windows.MessageBox.Show(
+                    "Confirm you want to close the selected batch?",
+                    "Close Batch",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Question);
+                if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+                IsBusy = true;
+                await _batches.CloseBatchesAsync(new[] { SelectedBatch.Id });
+                await LoadRecentBatchesAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "Close Batch Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 }

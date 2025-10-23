@@ -10,7 +10,7 @@
             </MenuItem>
         </Menu>
         <StackPanel Orientation="Horizontal" DockPanel.Dock="Top" Margin="8">
-            <Button Content="Import Bank File" Command="{Binding ImportCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
+            <Button Content="Import File" Command="{Binding ImportCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
             <Button Content="Auto-Apply All" Command="{Binding AutoApplyCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
             <Button Content="Export Auto-Applied" Command="{Binding ExportCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
             <Button Content="Print Batch Summary" Command="{Binding PrintCommand}" IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
@@ -19,19 +19,50 @@
 
         <TabControl Margin="8" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}">
             <TabItem Header="Batches">
-                <DataGrid ItemsSource="{Binding Batches}" SelectedItem="{Binding SelectedBatch}" IsReadOnly="True" AutoGenerateColumns="False">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Deposit #" Binding="{Binding DepositNumber}" Width="*"/>
-                        <DataGridTextColumn Header="Imported At" Binding="{Binding ImportedAt}" Width="*"/>
-                        <DataGridTextColumn Header="Imported By" Binding="{Binding ImportedBy}" Width="*"/>
-                        <DataGridTextColumn Header="Source File" Binding="{Binding SourceFilename}" Width="*"/>
-                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
-                    </DataGrid.Columns>
-                </DataGrid>
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <!-- Left: Close button -->
+                        <Button Grid.Column="0"
+                                Content="Close Batch"
+                                Command="{Binding CloseBatchCommand}"
+                                CommandParameter="{Binding SelectedItems, ElementName=BatchesGrid}"
+                                Margin="8,8,8,8"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource BooleanNegationConverter}}"/>
+                        <!-- Right: Filter -->
+                        <StackPanel Grid.Column="1" Margin="8,8,8,8" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock Text="Show:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox Width="120"
+                                      SelectedValuePath="Content"
+                                      SelectedValue="{Binding BatchFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                <ComboBoxItem Content="Open"/>
+                                <ComboBoxItem Content="Closed"/>
+                            </ComboBox>
+                        </StackPanel>
+                    </Grid>
+                    <DataGrid x:Name="BatchesGrid"
+                              ItemsSource="{Binding Batches}"
+                              SelectedItem="{Binding SelectedBatch}"
+                              IsReadOnly="True"
+                              SelectionMode="Extended"
+                              SelectionUnit="FullRow"
+                              AutoGenerateColumns="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Batch Name" Binding="{Binding BatchName}" Width="*"/>
+                            <DataGridTextColumn Header="Imported At" Binding="{Binding ImportedAt}" Width="*"/>
+                            <DataGridTextColumn Header="Imported By" Binding="{Binding ImportedBy}" Width="*"/>
+                            <DataGridTextColumn Header="Source File" Binding="{Binding SourceFilename}" Width="*"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
             </TabItem>
             <TabItem Header="Payments">
                 <DockPanel>
-                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Top" Margin="8,8,8,8">
                         <Button Content="Assign Customer" Command="{Binding AssignCustomerCommand}" />
                     </StackPanel>
                     <DataGrid ItemsSource="{Binding Payments}" SelectedItem="{Binding SelectedPayment, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutoGenerateColumns="False">
@@ -54,13 +85,13 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Check #" Binding="{Binding CheckNumber}" Width="*" />
-                        <DataGridTextColumn Header="Remitter Name" Binding="{Binding RemitterName}" Width="*" />
-                        <DataGridTextColumn Header="City" Binding="{Binding City}" Width="140" />
-                        <DataGridTextColumn Header="Invoice #" Binding="{Binding InvoiceNumber}" Width="160" />
-                        <DataGridTextColumn Header="Bank Number" Binding="{Binding BankNumber}" Width="160" />
-                        <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber}" Width="160" />
-                        <DataGridTemplateColumn Header="Cust # File" Width="*">
+                        <DataGridTextColumn Header="Check #" Binding="{Binding CheckNumber}" Width="Auto" />
+                        <DataGridTextColumn Header="Remitter Name" Binding="{Binding RemitterName}" Width="2*" />
+                        <DataGridTextColumn Header="City" Binding="{Binding City}" Width="*" />
+                        <DataGridTextColumn Header="Invoice #" Binding="{Binding InvoiceNumber}" Width="*" />
+                        <DataGridTextColumn Header="Bank Number" Binding="{Binding BankNumber}" Width="*" />
+                        <DataGridTextColumn Header="Account Number" Binding="{Binding AccountNumber}" Width="*" />
+                        <DataGridTemplateColumn Header="Cust #" Width="*">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding CustomerId}" ToolTip="{Binding OriginalCustomerId}">
@@ -78,8 +109,8 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Amount" Binding="{Binding Amount}" Width="120" />
-                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="120" />
+                        <DataGridTextColumn Header="Amount" Binding="{Binding Amount}" Width="*" />
+                        <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*" />
                     </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>

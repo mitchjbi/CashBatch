@@ -14,8 +14,8 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" VerticalAlignment="Center" Text="Deposit Number:"/>
-        <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding DepositNumber, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" VerticalAlignment="Center" Text="Batch Name:"/>
+        <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding BatchName, UpdateSourceTrigger=PropertyChanged}"/>
 
         <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" VerticalAlignment="Center" Text="Period:"/>
         <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding Period, UpdateSourceTrigger=PropertyChanged}"/>

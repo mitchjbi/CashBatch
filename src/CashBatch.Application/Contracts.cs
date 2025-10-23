@@ -1,6 +1,6 @@
 ﻿namespace CashBatch.Application;
 
-public record BatchDto(Guid Id, string? DepositNumber, DateTime ImportedAt, string ImportedBy, string SourceFilename, string Status);
+public record BatchDto(Guid Id, string? BatchName, DateTime ImportedAt, string ImportedBy, string SourceFilename, string Status, int? TemplateId);
 public record PaymentDto(
     Guid Id,
     Guid BatchId,
@@ -9,7 +9,11 @@ public record PaymentDto(
     string CheckNumber,
     string? RemitterName,
     string? City,
-    int? InvoiceNumber,
+    string? InvoiceNumber,
+    string? OrderNumber,
+    string? TransactionType,
+    string? Category,
+    DateTime? TransactionDate,
     string? BankNumber,
     string? AccountNumber,
     string? BankAccount,
@@ -20,6 +24,7 @@ public record PaymentDto(
 public record AppliedLineDto(string? InvoiceNo, DateTime? NetDueDate, decimal? AmountRemaining, decimal? FreightAllowedAmt, decimal? TermsAmount, string? BranchId, decimal AppliedAmount, bool WasAutoMatched);
 public record LookupDto(Guid Id, string KeyType, string KeyValue, string CustomerId, double Confidence);
 public record LogDto(Guid Id, Guid PaymentId, string Level, string Message, DateTime CreatedAt);
+public record CustomerLookupInfo(string? CustomerId, string? Name, string? MailCity);
 
 public record ExportOptions(
     string ExportDirectory,
@@ -30,11 +35,54 @@ public record ExportOptions(
     string ARAccountNumber,
     string TermsAccountNumber,
     string AllowedAccountNumber,
-    string DepositNumber);
+    string BatchName);
+
+// Template DTOs and service contract
+public record CashTemplateDetailDto(
+    int DetailId,
+    int TemplateId,
+    string TargetField,
+    string? SourceHeader,
+    int? SourceColumnIndex,
+    int? FixedWidthStart,
+    int? FixedWidthLength,
+    bool IsRequired,
+    string? DefaultValue,
+    string? Transform,
+    string? ValidationRule,
+    string? Notes);
+
+public record CashTemplateDto(
+    int TemplateId,
+    string Name,
+    string? Description,
+    string FileType,
+    bool HasHeaders,
+    int HeaderRowIndex,
+    int DataStartRowIndex,
+    string? Delimiter,
+    string? QuoteChar,
+    string? EscapeChar,
+    string? Culture,
+    string? DateFormats,
+    string? Encoding,
+    string? WorksheetName,
+    bool IsActive,
+    string? CreatedBy,
+    DateTime CreatedAtUtc,
+    string? ModifiedBy,
+    DateTime? ModifiedAtUtc,
+    IReadOnlyList<CashTemplateDetailDto> Details);
+
+public interface ITemplateService
+{
+    Task<IReadOnlyList<CashTemplateDto>> GetAllAsync(bool onlyActive = true);
+    Task<CashTemplateDto?> GetByIdAsync(int templateId);
+}
 
 public interface IImportService
 {
-    Task<BatchDto> ImportAsync(string filePath, string importedBy, string? depositNumber);
+    Task<BatchDto> ImportAsync(string filePath, string importedBy, string? depositNumber, int? templateId);
 }
 
 public interface IMatchingService
@@ -44,12 +92,15 @@ public interface IMatchingService
 
 public interface IBatchService
 {
-    Task<IReadOnlyList<BatchDto>> GetRecentAsync(int take = 50);
+    Task<IReadOnlyList<BatchDto>> GetRecentAsync(int take = 100);
+    Task<IReadOnlyList<BatchDto>> GetRecentByStatusAsync(string status, int take = 100);
     Task<IReadOnlyList<PaymentDto>> GetPaymentsAsync(Guid batchId);
     Task<IReadOnlyList<PaymentDto>> GetNeedsReviewAsync(Guid batchId);
     Task<IReadOnlyList<AppliedLineDto>> GetAppliedAsync(Guid paymentId);
     Task AssignCustomerAsync(Guid paymentId, string customerId);
-    Task<string?> GetPossibleCustomerIdAsync(int invoiceNumber);
+    Task<string?> GetPossibleCustomerIdAsync(string invoiceNumber);
+    Task<CustomerLookupInfo?> GetCustomerLookupAsync(string invoiceNumber);
+    Task CloseBatchesAsync(IEnumerable<Guid> batchIds);
 }
 
 public interface ILookupService

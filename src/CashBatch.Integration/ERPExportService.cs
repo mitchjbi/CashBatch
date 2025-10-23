@@ -27,7 +27,29 @@ public class ERPExportService : IERPExportService
         // Load batch info as no-tracking to avoid poisoning the context with tracked state
         var batch = await _db.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == batchId)
             ?? throw new InvalidOperationException("Batch not found.");
-        var depositNumber = options.DepositNumber;
+        var depositNumber = options.BatchName;
+
+        // Resolve the template name for file naming (fallback to "unknown" if not set)
+        string templateName = "unknown";
+        if (batch.TemplateId.HasValue)
+        {
+            var tname = await _db.CashTemplates.AsNoTracking()
+                .Where(t => t.TemplateId == batch.TemplateId.Value)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync();
+            if (!string.IsNullOrWhiteSpace(tname)) templateName = tname.Trim();
+        }
+
+        // Sanitize template name for filesystem usage
+        string Sanitize(string name)
+        {
+            var invalid = Path.GetInvalidFileNameChars();
+            var cleaned = new string(name.Where(c => !invalid.Contains(c)).ToArray());
+            return string.IsNullOrWhiteSpace(cleaned) ? "unknown" : cleaned.Replace(' ', '_');
+        }
+
+        var safeTemplate = Sanitize(templateName);
+        var dateStamp = DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
 
         // Important: clear any previously tracked entities so we fetch fresh CustomerId values
         // Some payments may have been updated in a different DbContext during Auto-Apply
@@ -62,6 +84,7 @@ public class ERPExportService : IERPExportService
         {
             var terms = p.Lines.Sum(l => l.TermsTakenAmt ?? 0m);
             var allowed = p.Lines.Sum(l => l.FreightTakenAmt ?? 0m);
+            // Keep header Payment Amount at the original check amount; matching now enforces exact sums
 
             // Determine BranchId to use for header GL accounts: always use the first invoice line's BranchId
             // If it's null/missing, use the default GL values from settings (no replacement).
@@ -125,17 +148,17 @@ public class ERPExportService : IERPExportService
             p.Status = PaymentStatus.Exported;
         }
 
-        // Write files (overwrite)
-        var headerPath = Path.Combine(options.ExportDirectory, "CashReceipts.txt");
-        var detailPath = Path.Combine(options.ExportDirectory, "CashReceiptLines.txt");
+        // Write files (overwrite) with new naming: hdr_{template}_yyyymmdd.txt and line_{template}_yyyymmdd.txt
+        var headerPath = Path.Combine(options.ExportDirectory, $"hdr_{safeTemplate}_{dateStamp}.txt");
+        var detailPath = Path.Combine(options.ExportDirectory, $"line_{safeTemplate}_{dateStamp}.txt");
         await File.WriteAllLinesAsync(headerPath, headerLines);
         await File.WriteAllLinesAsync(detailPath, detailLines);
 
         var count = payments.Count;
 
-        // Persist status changes and deposit number on the batch
+        // Persist status changes and batch name on the batch
         var batchToUpdate = await _db.Batches.FirstAsync(b => b.Id == batchId);
-        batchToUpdate.DepositNumber = depositNumber;
+        batchToUpdate.BatchName = depositNumber;
         await _db.SaveChangesAsync();
         return count;
     }

@@ -10,7 +10,7 @@ namespace CashBatch.Desktop
             DataContext = this;
         }
 
-        public string? DepositNumber { get; set; }
+        public string? BatchName { get; set; }
         public int Period { get; set; }
         public int FiscalYear { get; set; }
 

@@ -11,8 +11,10 @@ public class Batch
     public string SourceFilename { get; set; } = "";
     public DateTime? DepositDate { get; set; } // from CSV header/rows
     public string? CustomerBatchNumber { get; set; } // from CSV header/rows
-    public string? DepositNumber { get; set; } // set at export time
+    public string? BatchName { get; set; } // set at export time
     public BatchStatus Status { get; set; } = BatchStatus.Open;
+    // Template used for this batch (nullable for legacy rows)
+    public int? TemplateId { get; set; }
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
 }
 
@@ -33,7 +35,9 @@ public class Payment
     public string? BankAccount { get; set; } // kept for backward compat; will mirror AccountNumber
     public string? RemitterName { get; set; }
     public string? City { get; set; }
-    public int? InvoiceNumber { get; set; }
+    public string? InvoiceNumber { get; set; }
+    public string? OrderNumber { get; set; }
+    public DateTime? TransactionDate { get; set; }
     public string? TransactionType { get; set; }
     public string? Category { get; set; }
     public string? RemitAddressHash { get; set; }

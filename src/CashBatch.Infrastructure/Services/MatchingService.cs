@@ -92,7 +92,7 @@ namespace CashBatch.Infrastructure.Services
                             var applied = m.Item2;
                             // Determine which optional deductions were taken to reach the applied amount
                             // Compare against 4 possibilities: Full, LessFreight, LessTerms, LessBoth
-                            const decimal eps = 0.01m;
+                            const decimal eps = 0.00m;
                             var full = Math.Round(info.AmountRemaining, 2, MidpointRounding.AwayFromZero);
                             var lessFreight = Math.Round(Math.Max(info.AmountRemaining - info.FreightAllowedAmt, 0m), 2, MidpointRounding.AwayFromZero);
                             var lessTerms = Math.Round(Math.Max(info.AmountRemaining - info.TermsAmount, 0m), 2, MidpointRounding.AwayFromZero);
@@ -407,7 +407,7 @@ WHERE p.[BatchId] = {0}
         private List<(InvoiceInfo Info, decimal AppliedAmount)>? TryFindExactMatch(
             IEnumerable<InvoiceInfo> invoices, decimal amount)
         {
-            const decimal epsilon = 0.01m; // accept 1-cent differences
+            const decimal epsilon = 0.00m; // require exact match to the penny
             amount = Math.Round(amount, 2, MidpointRounding.AwayFromZero);
 
             var items = invoices

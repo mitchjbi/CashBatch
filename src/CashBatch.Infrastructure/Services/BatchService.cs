@@ -26,11 +26,29 @@ public class BatchService : IBatchService
     public async Task<IReadOnlyList<BatchDto>> GetRecentAsync(int take = 50)
     {
         await using var db = await _factory.CreateDbContextAsync();
-        return await db.Batches.AsNoTracking()
+        var rows = await db.Batches.AsNoTracking()
             .OrderByDescending(b => b.ImportedAt)
             .Take(take)
-            .Select(b => new BatchDto(b.Id, b.DepositNumber, b.ImportedAt, b.ImportedBy, b.SourceFilename, b.Status.ToString()))
+            .Select(b => new { b.Id, b.BatchName, b.ImportedAt, b.ImportedBy, b.SourceFilename, StatusNum = (int)b.Status, b.TemplateId })
             .ToListAsync();
+        return rows
+            .Select(b => new BatchDto(b.Id, b.BatchName, b.ImportedAt, b.ImportedBy, b.SourceFilename, b.StatusNum == 0 ? "Open" : b.StatusNum == 1 ? "Closed" : b.StatusNum.ToString(), b.TemplateId))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<BatchDto>> GetRecentByStatusAsync(string status, int take = 100)
+    {
+        await using var db = await _factory.CreateDbContextAsync();
+        var isClosed = string.Equals(status, "Closed", StringComparison.OrdinalIgnoreCase);
+        var rows = await db.Batches.AsNoTracking()
+            .Where(b => (int)b.Status == (isClosed ? 1 : 0))
+            .OrderByDescending(b => b.ImportedAt)
+            .Take(take)
+            .Select(b => new { b.Id, b.BatchName, b.ImportedAt, b.ImportedBy, b.SourceFilename, StatusNum = (int)b.Status, b.TemplateId })
+            .ToListAsync();
+        return rows
+            .Select(b => new BatchDto(b.Id, b.BatchName, b.ImportedAt, b.ImportedBy, b.SourceFilename, b.StatusNum == 0 ? "Open" : b.StatusNum == 1 ? "Closed" : b.StatusNum.ToString(), b.TemplateId))
+            .ToList();
     }
 
     public async Task<IReadOnlyList<PaymentDto>> GetPaymentsAsync(Guid batchId)
@@ -48,6 +66,10 @@ public class BatchService : IBatchService
                 p.RemitterName,
                 p.City,
                 p.InvoiceNumber,
+                p.OrderNumber,
+                p.TransactionType,
+                p.Category,
+                p.TransactionDate,
                 p.BankNumber,
                 p.AccountNumber,
                 p.AccountNumber ?? p.BankAccount,
@@ -73,6 +95,10 @@ public class BatchService : IBatchService
                 p.RemitterName,
                 p.City,
                 p.InvoiceNumber,
+                p.OrderNumber,
+                p.TransactionType,
+                p.Category,
+                p.TransactionDate,
                 p.BankNumber,
                 p.AccountNumber,
                 p.AccountNumber ?? p.BankAccount,
@@ -203,7 +229,7 @@ public class BatchService : IBatchService
         }
     }
 
-    public async Task<string?> GetPossibleCustomerIdAsync(int invoiceNumber)
+    public async Task<string?> GetPossibleCustomerIdAsync(string invoiceNumber)
     {
         try
         {
@@ -214,7 +240,7 @@ public class BatchService : IBatchService
             await conn.OpenAsync();
 
             var dp = new DynamicParameters();
-            dp.Add("InvoiceNo", invoiceNumber.ToString(), System.Data.DbType.AnsiString);
+            dp.Add("InvoiceNo", invoiceNumber, System.Data.DbType.AnsiString);
 
             var rows = await conn.QueryAsync("jbi_sp_cash_batch_customer_lookup", dp, commandType: System.Data.CommandType.StoredProcedure);
             var first = rows.FirstOrDefault();
@@ -246,5 +272,82 @@ public class BatchService : IBatchService
         {
             return null;
         }
+    }
+
+    public async Task<CustomerLookupInfo?> GetCustomerLookupAsync(string invoiceNumber)
+    {
+        try
+        {
+            var connStr = _cfg.GetConnectionString("ReadDb");
+            if (string.IsNullOrWhiteSpace(connStr)) return null;
+
+            await using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            var dp = new DynamicParameters();
+            dp.Add("InvoiceNo", invoiceNumber, System.Data.DbType.AnsiString);
+
+            var rows = await conn.QueryAsync("jbi_sp_cash_batch_customer_lookup", dp, commandType: System.Data.CommandType.StoredProcedure);
+            var first = rows.FirstOrDefault();
+            if (first == null) return null;
+
+            string? custId = null;
+            string? name = null;
+            string? mailCity = null;
+
+            if (first is IDictionary<string, object> dict)
+            {
+                string? GetStr(params string[] names)
+                {
+                    foreach (var n in names)
+                    {
+                        var kv = dict.FirstOrDefault(k => string.Equals(k.Key, n, StringComparison.OrdinalIgnoreCase));
+                        if (!kv.Equals(default(KeyValuePair<string, object>)))
+                            return Convert.ToString(kv.Value);
+                    }
+                    return null;
+                }
+                custId = GetStr("customer_id", "CustomerId", "cust_id", "custno", "cust_no");
+                name = GetStr("name", "customer_name", "cust_name");
+                mailCity = GetStr("mail_city", "city", "mailcity");
+            }
+            else
+            {
+                try
+                {
+                    dynamic d = first;
+                    try { custId = (string?)(d.customer_id ?? d.CustomerId ?? d.cust_id ?? d.custno ?? d.cust_no); } catch { }
+                    try { name = (string?)(d.name ?? d.customer_name ?? d.cust_name); } catch { }
+                    try { mailCity = (string?)(d.mail_city ?? d.city ?? d.mailcity); } catch { }
+                }
+                catch { }
+            }
+
+            if (string.IsNullOrWhiteSpace(custId) && string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(mailCity))
+                return null;
+
+            return new CustomerLookupInfo(
+                string.IsNullOrWhiteSpace(custId) ? null : custId,
+                string.IsNullOrWhiteSpace(name) ? null : name,
+                string.IsNullOrWhiteSpace(mailCity) ? null : mailCity);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task CloseBatchesAsync(IEnumerable<Guid> batchIds)
+    {
+        await using var db = await _factory.CreateDbContextAsync();
+        var ids = batchIds.Distinct().ToList();
+        if (ids.Count == 0) return;
+        var rows = await db.Batches.Where(b => ids.Contains(b.Id)).ToListAsync();
+        foreach (var b in rows)
+        {
+            // Set to numeric 1 (Closed)
+            b.Status = (BatchStatus)1;
+        }
+        await db.SaveChangesAsync();
     }
 }
